@@ -265,3 +265,146 @@
         (ok new-message-id)
     )
 )
+
+;; #[allow(unchecked_data)]
+(define-public (create-project (name (string-ascii 100)) (description (string-ascii 500)) (space-id uint))
+    (let (
+        (new-project-id (+ (var-get total-projects) u1))
+        (space (unwrap! (map-get? collaboration-spaces { space-id: space-id }) err-not-found))
+        (is-member (is-space-member space-id tx-sender))
+    )
+        (asserts! is-member err-unauthorized)
+        (asserts! (get active space) err-not-active)
+        (map-set projects
+            { project-id: new-project-id }
+            {
+                name: name,
+                description: description,
+                space-id: space-id,
+                owner: tx-sender,
+                status: "active",
+                created-at: stacks-block-height
+            }
+        )
+        (map-set project-members
+            { project-id: new-project-id, member: tx-sender }
+            { role: "owner", joined-at: stacks-block-height }
+        )
+        (var-set total-projects new-project-id)
+        (begin
+            (unwrap-panic (increment-reputation tx-sender (get school-id space)))
+            (ok new-project-id)
+        )
+    )
+)
+
+;; #[allow(unchecked_data)]
+(define-public (join-project (project-id uint))
+    (let (
+        (project (unwrap! (map-get? projects { project-id: project-id }) err-not-found))
+        (space-id (get space-id project))
+        (is-member (is-space-member space-id tx-sender))
+        (already-joined (is-project-member project-id tx-sender))
+    )
+        (asserts! is-member err-unauthorized)
+        (asserts! (not already-joined) err-already-member)
+        (asserts! (is-eq (get status project) "active") err-not-active)
+        (ok (map-set project-members
+            { project-id: project-id, member: tx-sender }
+            { role: "member", joined-at: stacks-block-height }
+        ))
+    )
+)
+
+;; #[allow(unchecked_data)]
+(define-public (update-project-status (project-id uint) (new-status (string-ascii 20)))
+    (let (
+        (project (unwrap! (map-get? projects { project-id: project-id }) err-not-found))
+    )
+        (asserts! (is-eq tx-sender (get owner project)) err-unauthorized)
+        (ok (map-set projects
+            { project-id: project-id }
+            (merge project { status: new-status })
+        ))
+    )
+)
+
+;; #[allow(unchecked_data)]
+(define-public (deactivate-space (space-id uint))
+    (let (
+        (space (unwrap! (map-get? collaboration-spaces { space-id: space-id }) err-not-found))
+    )
+        (asserts! (is-eq tx-sender (get creator space)) err-unauthorized)
+        (ok (map-set collaboration-spaces
+            { space-id: space-id }
+            (merge space { active: false })
+        ))
+    )
+)
+
+;; #[allow(unchecked_data)]
+(define-public (reactivate-space (space-id uint))
+    (let (
+        (space (unwrap! (map-get? collaboration-spaces { space-id: space-id }) err-not-found))
+    )
+        (asserts! (is-eq tx-sender (get creator space)) err-unauthorized)
+        (ok (map-set collaboration-spaces
+            { space-id: space-id }
+            (merge space { active: true })
+        ))
+    )
+)
+
+;; #[allow(unchecked_data)]
+(define-public (remove-school-member (school-id uint) (member principal))
+    (let (
+        (school (unwrap! (map-get? schools { school-id: school-id }) err-not-found))
+    )
+        (asserts! (is-eq tx-sender (get admin school)) err-unauthorized)
+        (asserts! (not (is-eq member (get admin school))) err-unauthorized)
+        (ok (map-delete school-members { school-id: school-id, member: member }))
+    )
+)
+
+;; #[allow(unchecked_data)]
+(define-public (transfer-school-ownership (school-id uint) (new-admin principal))
+    (let (
+        (school (unwrap! (map-get? schools { school-id: school-id }) err-not-found))
+    )
+        (asserts! (is-eq tx-sender (get admin school)) err-unauthorized)
+        (map-set schools
+            { school-id: school-id }
+            (merge school { admin: new-admin })
+        )
+        (ok (map-set school-members
+            { school-id: school-id, member: new-admin }
+            { verified: true, role: "admin" }
+        ))
+    )
+)
+
+;; #[allow(unchecked_data)]
+(define-public (leave-space (space-id uint))
+    (let (
+        (space (unwrap! (map-get? collaboration-spaces { space-id: space-id }) err-not-found))
+        (is-member (is-space-member space-id tx-sender))
+    )
+        (asserts! is-member err-not-found)
+        (asserts! (not (is-eq tx-sender (get creator space))) err-unauthorized)
+        (ok (map-delete space-members { space-id: space-id, member: tx-sender }))
+    )
+)
+
+;; Private functions
+(define-private (increment-reputation (user principal) (school-id uint))
+    (let (
+        (current-rep (get-user-reputation user school-id))
+        (new-score (+ (get score current-rep) u10))
+        (new-contributions (+ (get contributions current-rep) u1))
+    )
+        (ok (map-set user-reputation
+            { user: user, school-id: school-id }
+            { score: new-score, contributions: new-contributions }
+        ))
+    )
+)
